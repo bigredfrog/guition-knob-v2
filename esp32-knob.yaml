@@ -42,6 +42,9 @@ external_components:
   - source: github://RAR/esphome-drv2605
     components: [drv2605]
     refresh: 1h
+  - source: github://stuartparmenter/ddp-esphome@main
+    components: [ddp, ddp_canvas]
+    refresh: 1h    
 
 esphome:
   name: ${name}
@@ -69,6 +72,24 @@ esp32:
 
 logger:
   level: WARN
+
+# Core DDP component - handles UDP reception and protocol
+ddp:
+  id: ddp_server
+  port: 4048
+
+# Canvas renderer - renders DDP stream to LVGL canvas
+ddp_canvas:
+  - id: canvas_renderer_1
+    ddp_id: ddp_server
+    stream: 1
+    canvas: canvas_main
+    width: 128
+    height: 128
+    back_buffers: 2
+    receiving:
+      id: ddp_receiving
+      name: "Stream 1 Active"
 
 api:
   on_client_connected:
@@ -699,6 +720,20 @@ media_player:
             phase: ${ui_phase_player_controls}
 
 binary_sensor:
+  - platform: template
+    id: ddp_stream_active
+    name: "DDP Stream Active"
+    internal: true
+    lambda: 'return id(ddp_receiving).state;'
+    on_state:
+      then:
+        - lambda: |-
+            if (x) {
+              lv_obj_clear_flag(id(canvas_main), LV_OBJ_FLAG_HIDDEN);
+            } else {
+              lv_obj_add_flag(id(canvas_main), LV_OBJ_FLAG_HIDDEN);
+            }
+
   - platform: gpio
     id: rotary_cw_pulse
     internal: true
@@ -1828,7 +1863,7 @@ display:
 lvgl:
   displays:
     - main_display
-  buffer_size: 12%
+  buffer_size: 100%
   color_depth: 16
   bg_color: 0x000000
   default_font: font_display
@@ -1962,6 +1997,14 @@ lvgl:
             text: "DEV BUILD 002"
             text_color: 0x00FF00
             text_font: font_playlist
+        - canvas:
+            id: canvas_main
+            width: 128
+            height: 128
+            align: CENTER
+            x: 0
+            y: 0
+            hidden: true
 
     - id: player_controls_page
       bg_color: 0x000000
