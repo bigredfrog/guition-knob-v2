@@ -1,3 +1,4 @@
+
 # ============================================================
 # HiFi-ESP32-S3 - Sendspin Configuration
 # ============================================================
@@ -8,8 +9,8 @@
 # ============================================================
 
 substitutions:
-  name: hifi-esp32-s3-3
-  friendly_name: HiFi-ESP32-GREY
+  name: hifi-esp32-s3-2
+  friendly_name: HiFi-ESP32-BLACK
   task_stack_in_psram: "true"
 
   # ===== Board-Specific Pinouts =====
@@ -66,20 +67,21 @@ esp32:
       CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST: "y"
       CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY: "y"
       CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC: "y"
-      CONFIG_MBEDTLS_SSL_PROTO_TLS1_3: "y"
+      CONFIG_MBEDTLS_SSL_PROTO_TLS1_3: "y" 
 
 logger:
-  level: info
-
-  # level: DEBUG
-  # logs:
-  #   sendspin: DEBUG
-  #   media_source: DEBUG
-  #   media_player: DEBUG
-  #   speaker: DEBUG
-  #   i2s_audio: DEBUG
-  #   ethernet: DEBUG
-  #   api: WARN
+  level: DEBUG
+  logs:
+    wifi: DEBUG
+    # Silence components that would flood at DEBUG
+    sensor: INFO
+    text_sensor: INFO
+    api: INFO
+    api.service: INFO
+    mqtt: INFO
+    i2s_audio: INFO
+    speaker: INFO
+    sendspin: INFO
 
 api:
   reboot_timeout: 0s
@@ -88,10 +90,16 @@ ota:
   platform: esphome
   password: !secret esphome_ota_password
 
-# wifi:
-#   ssid: !secret esphome_wifi_ssid
-#   password: !secret esphome_wifi_password
-#   use_address: 192.168.1.27
+wifi:
+  ssid: !secret esphome_wifi_ssid
+  password: !secret esphome_wifi_password
+  use_address: 192.168.1.26
+  power_save_mode: none  # Mains powered - no need for WiFi sleep, avoids dropout/jitter - enable after reproducing failure
+  on_disconnect:
+    - logger.log:
+        level: WARN
+        tag: wifi
+        format: "WiFi disconnected"
 
 psram:
   mode: octal
@@ -110,14 +118,14 @@ packages:
       - firmware/esphome/packages/audio.yaml
       - firmware/esphome/packages/sendspin.yaml
       # Optional: OLED displays clock when idling, and track/artist info when playing
-      # - firmware/esphome/packages/sendspin-addon-oled.yaml
+      - firmware/esphome/packages/sendspin-addon-oled.yaml
 
       - firmware/esphome/packages/light.yaml
       - firmware/esphome/packages/ir-receiver.yaml
       - firmware/esphome/packages/monitoring.yaml
-#      - firmware/esphome/packages/monitoring-wifi.yaml
+      - firmware/esphome/packages/monitoring-wifi.yaml
       # Optional ethernet (replace wifi config if you use this, you need to exclude OLED package if you do this to free up SPI bus)
-      - firmware/esphome/packages/ethernet-w5500.yaml
+      # - firmware/esphome/packages/ethernet-w5500.yaml
 
   # # Debug/local development fallback:
   # sendspin: !include packages/sendspin.yaml

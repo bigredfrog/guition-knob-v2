@@ -92,6 +92,7 @@ ddp_canvas:
       name: "Stream 1 Active"
 
 api:
+  reboot_timeout: 0s
   on_client_connected:
     - lambda: |-
         if (!id(boot_sound_played)) {
