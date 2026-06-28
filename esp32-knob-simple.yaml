@@ -32,9 +32,10 @@ external_components:
   - source: github://RAR/esphome-drv2605
     components: [drv2605]
     refresh: 1h
-  - source: github://stuartparmenter/ddp-esphome@main
+  - source:
+      type: local
+      path: external_components/ddp-esphome/components
     components: [ddp, ddp_canvas]
-    refresh: 1h
 
 esphome:
   name: ${name}
@@ -68,6 +69,7 @@ wifi:
   ssid: !secret esphome_wifi_ssid
   password: !secret esphome_wifi_password
   use_address: 192.168.1.28
+  power_save_mode: none
   ap:
 
 api:
@@ -1198,8 +1200,8 @@ lvgl:
 
         - canvas:
             id: canvas_main
-            width: 128
-            height: 128
+            width: 360
+            height: 360
             align: CENTER
             x: 0
             y: 0
