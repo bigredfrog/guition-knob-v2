@@ -1,0 +1,1303 @@
+substitutions:
+  name: esp32-knob
+  friendly_name: ESP-32-KNOB
+  dev_sw_version: "DEV SW 0.3"
+
+  display_model: "JC3636W518V2"
+  pdm_mic_type: "true"
+
+  screenwidth: "360"
+  screenheight: "360"
+  imagewidth: "360"
+  imageheight: "360"
+
+  media_sample_rate: "48000"
+  ui_phase_controls: "1"
+  ui_phase_now_playing: "2"
+
+spi:
+  id: display_qspi
+  type: quad
+  clk_pin: GPIO11
+  data_pins: [GPIO13, GPIO14, GPIO15, GPIO16]
+
+i2c:
+  id: touchscreen_bus
+  sda: GPIO9
+  scl: GPIO10
+
+external_components:
+  - source: github://pr#16057
+    components: [generic_image, sendspin]
+  - source: github://RAR/esphome-drv2605
+    components: [drv2605]
+    refresh: 1h
+  - source: github://stuartparmenter/ddp-esphome@main
+    components: [ddp, ddp_canvas]
+    refresh: 1h
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  min_version: 2026.5.0
+  name_add_mac_suffix: true
+  project:
+    name: realdeco.sendspin_guition_min
+    version: "2026.6.0"
+  on_boot:
+    priority: -100
+    then:
+      - script.execute: configure_rotary_arc_geometry
+      - lvgl.page.show: boot_page
+      - delay: 1800ms
+      - script.execute:
+          id: set_ui_phase
+          phase: ${ui_phase_controls}
+      - script.execute: led_ring_apply_state
+
+esp32:
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+logger:
+  level: WARN
+
+wifi:
+  ssid: !secret esphome_wifi_ssid
+  password: !secret esphome_wifi_password
+  use_address: 192.168.1.28
+  ap:
+
+api:
+  reboot_timeout: 0s
+
+ota:
+  platform: esphome
+  password: !secret esphome_ota_password
+
+psram:
+  mode: octal
+  speed: 80MHz
+  ignore_not_found: false
+
+# Core DDP component - handles UDP reception
+# Canvas renderer - maps DDP stream to LVGL canvas
+
+ddp:
+  id: ddp_server
+  port: 4048
+
+ddp_canvas:
+  - id: canvas_renderer_1
+    ddp_id: ddp_server
+    stream: 1
+    canvas: canvas_main
+    width: 128
+    height: 128
+    back_buffers: 2
+    receiving:
+      id: ddp_receiving
+      name: "Stream 1 Active"
+
+image:
+  - file: assets/RCoE_small_LOGO.png
+    id: fallback_playing_image
+    resize: ${imagewidth}x${imageheight}
+    type: RGB565
+    dither: NONE
+
+generic_image:
+  - platform: sendspin
+    id: sendspin_album_art
+    format: jpeg
+    type: RGB565
+    resize: ${imagewidth}x${imageheight}
+    source: ALBUM
+    on_image_display:
+      - script.stop: album_art_timeout_fallback
+      - lambda: |-
+          id(sendspin_album_art_valid) = true;
+      - if:
+          condition:
+            lambda: 'return !id(album_art_slide_active);'
+          then:
+            - script.execute: album_art_apply_decoded
+    on_image_error:
+      - lambda: |-
+          id(sendspin_album_art_valid) = false;
+          if (!id(album_art_slide_active)) {
+            lv_obj_add_flag(id(album_art_transition_widget), LV_OBJ_FLAG_HIDDEN);
+          }
+      - lvgl.image.update:
+          id: album_art_widget
+          src: fallback_playing_image
+      - lvgl.image.update:
+          id: controls_album_art_widget
+          src: fallback_playing_image
+
+sendspin:
+  id: sendspin_hub
+  task_stack_in_psram: false
+
+drv2605:
+  id: haptic_driver
+  i2c_id: touchscreen_bus
+  address: 0x5A
+  motor_type: LRA
+  library: 6
+
+globals:
+  - id: ui_phase
+    type: int
+    restore_value: no
+    initial_value: "${ui_phase_controls}"
+
+  - id: sendspin_album_art_valid
+    type: bool
+    restore_value: no
+    initial_value: "false"
+  - id: album_art_slide_active
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
+  - id: touch_active
+    type: bool
+    restore_value: no
+    initial_value: "false"
+  - id: touch_swipe_detected
+    type: bool
+    restore_value: no
+    initial_value: "false"
+  - id: touch_start_x
+    type: int
+    restore_value: no
+    initial_value: "0"
+  - id: touch_start_y
+    type: int
+    restore_value: no
+    initial_value: "0"
+  - id: touch_last_x
+    type: int
+    restore_value: no
+    initial_value: "0"
+  - id: touch_last_y
+    type: int
+    restore_value: no
+    initial_value: "0"
+  - id: touch_start_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: "0"
+
+  - id: haptic_last_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: "0"
+
+switch:
+  - platform: gpio
+    name: Speaker Enable
+    icon: "mdi:speaker"
+    entity_category: config
+    pin:
+      number: GPIO46
+      ignore_strapping_warning: true
+    restore_mode: RESTORE_DEFAULT_ON
+
+  - platform: template
+    id: rotary_haptic_feedback_enabled
+    name: Rotary haptic feedback
+    icon: "mdi:vibrate"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+
+  - platform: template
+    id: led_ring_enabled
+    name: LED ring
+    icon: "mdi:led-strip-variant"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      - script.execute: led_ring_apply_state
+    on_turn_off:
+      - light.turn_off: rgb_ring
+
+i2s_audio:
+  - id: i2s_mic
+    i2s_bclk_pin: GPIO5
+
+  - id: i2s_audio_bus
+    i2s_lrclk_pin:
+      number: GPIO45
+      ignore_strapping_warning: true
+    i2s_bclk_pin: GPIO3
+
+microphone:
+  - platform: i2s_audio
+    id: box_mic
+    i2s_audio_id: i2s_mic
+    i2s_din_pin: GPIO4
+    adc_type: external
+    channel: left
+    pdm: ${pdm_mic_type}
+    sample_rate: 16000
+    bits_per_sample: 16bit
+
+speaker:
+  - platform: i2s_audio
+    id: box_speaker
+    i2s_audio_id: i2s_audio_bus
+    i2s_dout_pin: GPIO42
+    dac_type: external
+    channel: stereo
+    buffer_duration: 300ms
+
+  - platform: mixer
+    id: mixing_speaker
+    output_speaker: box_speaker
+    num_channels: 2
+    task_stack_in_psram: true
+    source_speakers:
+      - id: announcement_mixing_input
+      - id: media_mixing_input
+
+  - platform: resampler
+    id: media_resampling_speaker
+    output_speaker: media_mixing_input
+    sample_rate: ${media_sample_rate}
+    bits_per_sample: 16
+
+media_source:
+  - platform: audio_http
+    id: http_media_source
+  - platform: sendspin
+    id: sendspin_media_source
+
+media_player:
+  - platform: sendspin
+    id: sendspin_group_media_player
+    name: Sendspin Group Media Player
+
+  - platform: speaker_source
+    id: external_media_player
+    name: Media Player
+
+    media_pipeline:
+      format: FLAC
+      num_channels: 2
+      sample_rate: ${media_sample_rate}
+      speaker: media_resampling_speaker
+      sources:
+        - http_media_source
+        - sendspin_media_source
+    volume_increment: 0.05
+    volume_min: 0.35
+    volume_max: 0.90
+
+    on_play:
+      then:
+        - script.execute: led_ring_apply_state
+        - lvgl.widget.show: now_playing_bar
+        - script.execute:
+            id: set_ui_phase
+            phase: ${ui_phase_now_playing}
+
+    on_pause:
+      then:
+        - script.execute: led_ring_apply_state
+        - lvgl.widget.hide: now_playing_bar
+
+    on_idle:
+      then:
+        - script.execute: led_ring_apply_state
+        - lvgl.widget.hide: now_playing_bar
+
+binary_sensor:
+  - platform: template
+    id: ddp_stream_active
+    name: "DDP Stream Active"
+    internal: true
+    lambda: 'return id(ddp_receiving).state;'
+    on_state:
+      then:
+        - lambda: |-
+            if (x) {
+              lv_obj_clear_flag(id(canvas_main), LV_OBJ_FLAG_HIDDEN);
+            } else {
+              lv_obj_add_flag(id(canvas_main), LV_OBJ_FLAG_HIDDEN);
+            }
+
+  - platform: gpio
+    id: rotary_cw_pulse
+    internal: true
+    pin:
+      number: GPIO1
+      mode:
+        input: true
+        pullup: true
+    use_interrupt: false
+    filters:
+      - delayed_on_off: 2ms
+    on_press:
+      then:
+        - media_player.volume_up: external_media_player
+        - script.execute: haptic_click
+        - script.execute: show_rotary_volume_feedback
+
+  - platform: gpio
+    id: rotary_ccw_pulse
+    internal: true
+    pin:
+      number: GPIO2
+      mode:
+        input: true
+        pullup: true
+    use_interrupt: false
+    filters:
+      - delayed_on_off: 2ms
+    on_press:
+      then:
+        - media_player.volume_down: external_media_player
+        - script.execute: haptic_click
+        - script.execute: show_rotary_volume_feedback
+
+text_sensor:
+  - platform: sendspin
+    id: sendspin_title
+    type: title
+    on_value:
+      - lambda: |-
+          id(sendspin_album_art_valid) = false;
+      - script.execute: album_art_timeout_fallback
+      - component.update: now_playing_text
+      - lvgl.label.update:
+          id: controls_title_label
+          text: !lambda return x;
+
+  - platform: sendspin
+    id: sendspin_artist
+    type: artist
+    on_value:
+      - lambda: |-
+          id(sendspin_album_art_valid) = false;
+      - script.execute: album_art_timeout_fallback
+      - component.update: now_playing_text
+      - lvgl.label.update:
+          id: controls_artist_label
+          text: !lambda return x;
+
+  - platform: template
+    id: now_playing_text
+    update_interval: never
+    lambda: |-
+      std::string s = id(sendspin_title).get_state();
+      auto a = id(sendspin_artist).get_state();
+      if (!a.empty()) {
+        if (!s.empty()) s += " - ";
+        s += a;
+      }
+      return s;
+    on_value:
+      - lvgl.label.update:
+          id: now_playing_label
+          text: !lambda return x;
+
+font:
+  - file:
+      type: gfonts
+      family: Noto Sans
+      weight: 300
+    id: font_display
+    size: 22
+    glyphsets:
+      - GF_Latin_Core
+      - GF_Cyrillic_Core
+
+  - file:
+      type: gfonts
+      family: Figtree
+      weight: 300
+    id: font_date
+    size: 28
+    glyphsets:
+      - GF_Latin_Core
+
+  - file:
+      type: gfonts
+      family: Figtree
+      weight: 600
+    id: font_boot
+    size: 42
+    glyphsets:
+      - GF_Latin_Core
+
+  - file:
+      type: gfonts
+      family: Figtree
+      weight: 700
+    id: font_temp_big
+    size: 78
+    glyphs: "0123456789+-"
+
+  - file: https://github.com/Templarian/MaterialDesign-Webfont/raw/refs/heads/master/fonts/materialdesignicons-webfont.ttf
+    id: font_mdi_controls
+    size: 44
+    glyphs:
+      - "\U000F03E3"
+      - "\U000F040E"
+      - "\U000F04AD"
+      - "\U000F04AE"
+      - "\U000F075D"
+      - "\U000F075E"
+      - "\U000F075F"
+
+script:
+  - id: configure_rotary_arc_geometry
+    then:
+      - lambda: |-
+          // 0% at 12 o'clock, 100% at 11 o'clock (330-degree sweep)
+          lv_arc_set_rotation(id(rotary_volume_arc_controls), 270);
+          lv_arc_set_bg_angles(id(rotary_volume_arc_controls), 0, 330);
+          lv_arc_set_rotation(id(rotary_volume_arc), 270);
+          lv_arc_set_bg_angles(id(rotary_volume_arc), 0, 330);
+
+  - id: set_ui_phase
+    mode: restart
+    parameters:
+      phase: int
+    then:
+      - lambda: |-
+          id(ui_phase) = phase;
+      - if:
+          condition:
+            lambda: 'return phase == ${ui_phase_controls};'
+          then:
+            - lvgl.page.show: player_controls_page
+      - if:
+          condition:
+            lambda: 'return phase == ${ui_phase_now_playing};'
+          then:
+            - lvgl.page.show: sendspin_page
+
+  - id: led_ring_apply_state
+    mode: restart
+    then:
+      - if:
+          condition:
+            switch.is_off: led_ring_enabled
+          then:
+            - light.turn_off: rgb_ring
+          else:
+            - if:
+                condition:
+                  media_player.is_playing: external_media_player
+                then:
+                  - light.turn_on:
+                      id: rgb_ring
+                      brightness: 45%
+                      red: 0%
+                      green: 100%
+                      blue: 0%
+                else:
+                  - light.turn_on:
+                      id: rgb_ring
+                      brightness: 28%
+                      red: 100%
+                      green: 0%
+                      blue: 0%
+
+  - id: haptic_click
+    mode: restart
+    then:
+      - if:
+          condition:
+            switch.is_on: rotary_haptic_feedback_enabled
+          then:
+            - lambda: |-
+                const uint32_t now = millis();
+                if (now - id(haptic_last_ms) < 45) return;
+                id(haptic_last_ms) = now;
+            - drv2605.play_effect:
+                id: haptic_driver
+                effect: 7
+
+  - id: player_controls_toggle
+    then:
+      - delay: 75ms
+      - if:
+          condition:
+            lambda: 'return !id(touch_swipe_detected);'
+          then:
+            - media_player.toggle: sendspin_group_media_player
+
+  - id: player_controls_previous
+    then:
+      - delay: 75ms
+      - if:
+          condition:
+            lambda: 'return !id(touch_swipe_detected);'
+          then:
+            - script.execute:
+                id: album_art_slide
+                direction: 1
+            - media_player.previous: sendspin_group_media_player
+
+  - id: player_controls_next
+    then:
+      - delay: 75ms
+      - if:
+          condition:
+            lambda: 'return !id(touch_swipe_detected);'
+          then:
+            - script.execute:
+                id: album_art_slide
+                direction: -1
+            - media_player.next: sendspin_group_media_player
+
+  - id: player_controls_volume_down
+    then:
+      - delay: 75ms
+      - if:
+          condition:
+            lambda: 'return !id(touch_swipe_detected);'
+          then:
+            - media_player.volume_down: external_media_player
+            - script.execute:
+                id: show_volume_feedback
+                text: "-5"
+
+  - id: player_controls_volume_up
+    then:
+      - delay: 75ms
+      - if:
+          condition:
+            lambda: 'return !id(touch_swipe_detected);'
+          then:
+            - media_player.volume_up: external_media_player
+            - script.execute:
+                id: show_volume_feedback
+                text: "+5"
+
+  - id: player_controls_mute
+    then:
+      - delay: 75ms
+      - if:
+          condition:
+            lambda: 'return !id(touch_swipe_detected);'
+          then:
+            - media_player.mute: external_media_player
+
+  - id: now_playing_swipe_left
+    then:
+      - script.execute:
+          id: album_art_slide
+          direction: -1
+      - media_player.next: sendspin_group_media_player
+
+  - id: now_playing_swipe_right
+    then:
+      - script.execute:
+          id: album_art_slide
+          direction: 1
+      - media_player.previous: sendspin_group_media_player
+
+  - id: now_playing_swipe_up
+    then:
+      - media_player.volume_up: external_media_player
+      - script.execute:
+          id: show_volume_feedback
+          text: "+5"
+
+  - id: now_playing_swipe_down
+    then:
+      - media_player.volume_down: external_media_player
+      - script.execute:
+          id: show_volume_feedback
+          text: "-5"
+
+  - id: show_volume_feedback
+    mode: restart
+    parameters:
+      text: string
+    then:
+      - lambda: |-
+          lv_label_set_text(id(volume_feedback_label), text.c_str());
+          lv_obj_clear_flag(id(volume_feedback_box), LV_OBJ_FLAG_HIDDEN);
+      - delay: 1200ms
+      - lambda: |-
+          lv_obj_add_flag(id(volume_feedback_box), LV_OBJ_FLAG_HIDDEN);
+
+  - id: show_rotary_volume_feedback
+    mode: restart
+    then:
+      - script.stop: hide_rotary_volume_feedback
+      - lvgl.widget.show: rotary_volume_overlay_controls
+      - lvgl.widget.show: rotary_volume_overlay
+      - lvgl.arc.update:
+          id: rotary_volume_arc_controls
+          value: !lambda |-
+            const float volume = std::max(0.0f, std::min(1.0f, id(external_media_player).volume));
+            return (int) lroundf(volume * 100.0f);
+      - lvgl.arc.update:
+          id: rotary_volume_arc
+          value: !lambda |-
+            const float volume = std::max(0.0f, std::min(1.0f, id(external_media_player).volume));
+            return (int) lroundf(volume * 100.0f);
+      - lvgl.label.update:
+          id: rotary_volume_label_controls
+          text: !lambda |-
+            const float volume = std::max(0.0f, std::min(1.0f, id(external_media_player).volume));
+            char text[8];
+            snprintf(text, sizeof(text), "%d%%", (int) lroundf(volume * 100.0f));
+            return std::string(text);
+      - lvgl.label.update:
+          id: rotary_volume_label
+          text: !lambda |-
+            const float volume = std::max(0.0f, std::min(1.0f, id(external_media_player).volume));
+            char text[8];
+            snprintf(text, sizeof(text), "%d%%", (int) lroundf(volume * 100.0f));
+            return std::string(text);
+      - script.execute: hide_rotary_volume_feedback
+
+  - id: hide_rotary_volume_feedback
+    mode: restart
+    then:
+      - delay: 900ms
+      - lvgl.widget.hide: rotary_volume_overlay_controls
+      - lvgl.widget.hide: rotary_volume_overlay
+
+  - id: album_art_slide
+    mode: restart
+    parameters:
+      direction: int
+    then:
+      - lambda: |-
+          id(album_art_slide_active) = true;
+          id(sendspin_album_art_valid) = false;
+          lv_obj_t *current_art = id(album_art_widget);
+          lv_obj_t *incoming_art = id(album_art_transition_widget);
+          lv_anim_del(current_art, nullptr);
+          lv_anim_del(incoming_art, nullptr);
+          lv_img_set_src(incoming_art, id(fallback_playing_image));
+          lv_obj_set_x(current_art, 0);
+          lv_obj_set_x(incoming_art, -direction * ${screenwidth});
+          lv_obj_set_style_img_opa(current_art, LV_OPA_COVER, 0);
+          lv_obj_set_style_img_opa(incoming_art, LV_OPA_COVER, 0);
+          lv_obj_clear_flag(incoming_art, LV_OBJ_FLAG_HIDDEN);
+
+          lv_anim_t current_slide;
+          lv_anim_init(&current_slide);
+          lv_anim_set_var(&current_slide, current_art);
+          lv_anim_set_values(&current_slide, 0, direction * ${screenwidth});
+          lv_anim_set_time(&current_slide, 300);
+          lv_anim_set_exec_cb(&current_slide, [](void *obj, int32_t x) {
+            lv_obj_set_x((lv_obj_t *) obj, x);
+          });
+          lv_anim_start(&current_slide);
+
+          lv_anim_t incoming_slide;
+          lv_anim_init(&incoming_slide);
+          lv_anim_set_var(&incoming_slide, incoming_art);
+          lv_anim_set_values(&incoming_slide, -direction * ${screenwidth}, 0);
+          lv_anim_set_time(&incoming_slide, 300);
+          lv_anim_set_exec_cb(&incoming_slide, [](void *obj, int32_t x) {
+            lv_obj_set_x((lv_obj_t *) obj, x);
+          });
+          lv_anim_start(&incoming_slide);
+      - delay: 300ms
+      - lambda: |-
+          lv_obj_t *current_art = id(album_art_widget);
+          lv_obj_t *incoming_art = id(album_art_transition_widget);
+          lv_img_set_src(current_art, id(fallback_playing_image));
+          lv_obj_set_x(current_art, 0);
+          lv_obj_set_style_img_opa(current_art, LV_OPA_COVER, 0);
+          lv_obj_add_flag(incoming_art, LV_OBJ_FLAG_HIDDEN);
+          lv_obj_set_x(incoming_art, 0);
+          id(album_art_slide_active) = false;
+      - if:
+          condition:
+            lambda: 'return id(sendspin_album_art_valid);'
+          then:
+            - script.execute: album_art_apply_decoded
+
+  - id: album_art_apply_decoded
+    mode: restart
+    then:
+      - lambda: |-
+          lv_obj_t *now_playing_art = id(album_art_widget);
+          lv_obj_t *transition_art = id(album_art_transition_widget);
+          lv_obj_t *controls_art = id(controls_album_art_widget);
+          lv_img_set_src(controls_art, id(sendspin_album_art));
+          lv_img_set_zoom(controls_art, LV_ZOOM_NONE);
+
+          if (id(ui_phase) == ${ui_phase_now_playing}) {
+            lv_anim_del(transition_art, nullptr);
+            lv_img_set_src(transition_art, id(sendspin_album_art));
+            lv_img_set_zoom(transition_art, LV_ZOOM_NONE);
+            lv_obj_set_x(transition_art, 0);
+            lv_obj_set_style_img_opa(transition_art, LV_OPA_TRANSP, 0);
+            lv_obj_clear_flag(transition_art, LV_OBJ_FLAG_HIDDEN);
+
+            lv_anim_t fade_in;
+            lv_anim_init(&fade_in);
+            lv_anim_set_var(&fade_in, transition_art);
+            lv_anim_set_values(&fade_in, LV_OPA_TRANSP, LV_OPA_COVER);
+            lv_anim_set_time(&fade_in, 300);
+            lv_anim_set_exec_cb(&fade_in, [](void *obj, int32_t opacity) {
+              lv_obj_set_style_img_opa((lv_obj_t *) obj, opacity, 0);
+            });
+            lv_anim_start(&fade_in);
+          } else {
+            lv_img_set_src(now_playing_art, id(sendspin_album_art));
+            lv_img_set_zoom(now_playing_art, LV_ZOOM_NONE);
+          }
+
+  - id: album_art_timeout_fallback
+    mode: restart
+    then:
+      - delay: 800ms
+      - if:
+          condition:
+            lambda: 'return !id(sendspin_album_art_valid);'
+          then:
+            - lvgl.image.update:
+                id: album_art_widget
+                src: fallback_playing_image
+            - lvgl.image.update:
+                id: controls_album_art_widget
+                src: fallback_playing_image
+            - lambda: |-
+                if (!id(album_art_slide_active)) {
+                  lv_obj_add_flag(id(album_art_transition_widget), LV_OBJ_FLAG_HIDDEN);
+                }
+
+touchscreen:
+  - platform: cst816
+    id: my_touchscreen
+    interrupt_pin: GPIO7
+    reset_pin: GPIO8
+    display: main_display
+    i2c_id: touchscreen_bus
+    on_touch:
+      then:
+        - lambda: |-
+            id(touch_active) = true;
+            id(touch_start_x) = touch.x;
+            id(touch_start_y) = touch.y;
+            id(touch_last_x) = touch.x;
+            id(touch_last_y) = touch.y;
+            id(touch_start_ms) = millis();
+            id(touch_swipe_detected) = false;
+
+    on_update:
+      then:
+        - lambda: |-
+            if (!id(touch_active)) return;
+            for (auto &touch : touches) {
+              if (touch.state >= 1 && touch.state <= 2) {
+                id(touch_last_x) = touch.x;
+                id(touch_last_y) = touch.y;
+                const int min_dim = std::min(id(main_display).get_width(), id(main_display).get_height());
+                const int swipe_min_dist = std::max(16, min_dim / 8);
+                if (std::abs(id(touch_last_x) - id(touch_start_x)) >= swipe_min_dist ||
+                    std::abs(id(touch_last_y) - id(touch_start_y)) >= swipe_min_dist) {
+                  id(touch_swipe_detected) = true;
+                }
+                break;
+              }
+            }
+
+    on_release:
+      then:
+        - lambda: |-
+            if (!id(touch_active)) return;
+            id(touch_active) = false;
+
+            const int dx = id(touch_last_x) - id(touch_start_x);
+            const int dy = id(touch_last_y) - id(touch_start_y);
+            const int abs_x = std::abs(dx);
+            const int abs_y = std::abs(dy);
+            const uint32_t elapsed = millis() - id(touch_start_ms);
+            const int min_dim = std::min(id(main_display).get_width(), id(main_display).get_height());
+            const int swipe_min_dist = std::max(16, min_dim / 8);
+            const int tap_max_dist = std::max(14, min_dim / 12);
+
+            if (elapsed <= 1500 && (abs_x >= swipe_min_dist || abs_y >= swipe_min_dist)) {
+              if (id(ui_phase) == ${ui_phase_now_playing}) {
+                if (abs_x >= abs_y) {
+                  if (dx < 0) {
+                    id(now_playing_swipe_left)->execute();
+                  } else {
+                    id(now_playing_swipe_right)->execute();
+                  }
+                } else if (dy < 0) {
+                  id(now_playing_swipe_up)->execute();
+                } else {
+                  id(now_playing_swipe_down)->execute();
+                }
+              }
+              return;
+            }
+
+            if (elapsed <= 700 && abs_x <= tap_max_dist && abs_y <= tap_max_dist) {
+              if (id(ui_phase) == ${ui_phase_controls}) {
+                id(set_ui_phase)->execute(${ui_phase_now_playing});
+              } else {
+                id(set_ui_phase)->execute(${ui_phase_controls});
+              }
+            }
+
+display:
+  - platform: mipi_spi
+    id: main_display
+    model: ${display_model}
+    cs_pin: GPIO12
+    reset_pin: GPIO17
+    auto_clear_enabled: false
+    update_interval: never
+    dimensions:
+      height: ${screenheight}
+      width: ${screenwidth}
+
+output:
+  - platform: ledc
+    id: backlight_output
+    pin: GPIO21
+    inverted: false
+
+light:
+  - platform: monochromatic
+    id: Sled
+    name: Screen
+    icon: mdi:television
+    entity_category: config
+    output: backlight_output
+    restore_mode: ALWAYS_ON
+    default_transition_length: 250ms
+
+  - platform: esp32_rmt_led_strip
+    id: rgb_ring
+    name: RGB ring
+    icon: mdi:led-strip-variant
+    pin:
+      number: GPIO0
+      ignore_strapping_warning: true
+    num_leds: 13
+    chipset: WS2812
+    rgb_order: GRB
+    restore_mode: ALWAYS_OFF
+    default_transition_length: 250ms
+
+lvgl:
+  displays:
+    - main_display
+  buffer_size: 100%
+  color_depth: 16
+  bg_color: 0x000000
+  default_font: font_display
+
+  pages:
+    - id: boot_page
+      bg_color: 0x000000
+      widgets:
+        - label:
+            align: CENTER
+            text: "${dev_sw_version}"
+            text_color: 0xFFFFFF
+            text_font: font_boot
+            width: 320
+            long_mode: WRAP
+            text_align: CENTER
+
+    - id: player_controls_page
+      bg_color: 0x000000
+      widgets:
+        - image:
+            id: controls_album_art_widget
+            align: TOP_MID
+            x: 0
+            y: 0
+            src: fallback_playing_image
+            width: ${imagewidth}
+            height: ${imageheight}
+            antialias: false
+            clickable: false
+
+        - obj:
+            align: CENTER
+            width: 360
+            height: 360
+            bg_color: 0x000000
+            bg_opa: 58%
+            border_opa: TRANSP
+            radius: 0
+            scrollable: false
+
+        - label:
+            id: controls_title_label
+            align: TOP_MID
+            y: 46
+            width: 285
+            text: ""
+            text_color: 0xFFFFFF
+            text_font: font_date
+            long_mode: SCROLL_CIRCULAR
+            text_align: CENTER
+
+        - label:
+            id: controls_artist_label
+            align: TOP_MID
+            y: 82
+            width: 265
+            text: ""
+            text_color: 0x66CCFF
+            text_font: font_display
+            long_mode: SCROLL_CIRCULAR
+            text_align: CENTER
+
+        - button:
+            id: controls_mute_button
+            align: BOTTOM_MID
+            y: -58
+            width: 58
+            height: 48
+            radius: 24
+            bg_color: 0x202020
+            bg_opa: 85%
+            border_color: 0x505050
+            border_width: 1
+            pressed:
+              bg_color: 0x66CCFF
+              bg_opa: COVER
+              border_color: 0xFFFFFF
+              border_width: 3
+            on_click:
+              - script.execute: player_controls_mute
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "\U000F075F"
+                  text_color: 0xFFFFFF
+                  text_font: font_mdi_controls
+
+        - button:
+            id: controls_previous_button
+            align: CENTER
+            x: -104
+            y: 0
+            width: 84
+            height: 84
+            radius: 42
+            bg_color: 0x202020
+            bg_opa: 85%
+            border_color: 0x505050
+            border_width: 1
+            pressed:
+              bg_color: 0x66CCFF
+              bg_opa: COVER
+              border_color: 0xFFFFFF
+              border_width: 3
+            on_click:
+              - script.execute: player_controls_previous
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "\U000F04AE"
+                  text_color: 0xFFFFFF
+                  text_font: font_mdi_controls
+
+        - button:
+            id: controls_toggle_button
+            align: CENTER
+            y: 0
+            width: 104
+            height: 104
+            radius: 52
+            bg_color: 0xFFFF00
+            bg_opa: COVER
+            border_color: 0xFFFFFF
+            border_width: 2
+            pressed:
+              bg_color: 0xFFFFFF
+              border_color: 0x66CCFF
+              border_width: 4
+            on_click:
+              - script.execute: player_controls_toggle
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "\U000F040E"
+                  text_color: 0x101010
+                  text_font: font_mdi_controls
+
+        - button:
+            id: controls_next_button
+            align: CENTER
+            x: 104
+            y: 0
+            width: 84
+            height: 84
+            radius: 42
+            bg_color: 0x202020
+            bg_opa: 85%
+            border_color: 0x505050
+            border_width: 1
+            pressed:
+              bg_color: 0x66CCFF
+              bg_opa: COVER
+              border_color: 0xFFFFFF
+              border_width: 3
+            on_click:
+              - script.execute: player_controls_next
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "\U000F04AD"
+                  text_color: 0xFFFFFF
+                  text_font: font_mdi_controls
+
+        - button:
+            id: controls_volume_down_button
+            align: BOTTOM_MID
+            x: -72
+            y: -58
+            width: 58
+            height: 48
+            radius: 24
+            bg_color: 0x202020
+            bg_opa: 85%
+            border_color: 0x505050
+            border_width: 1
+            pressed:
+              bg_color: 0x66CCFF
+              bg_opa: COVER
+              border_color: 0xFFFFFF
+              border_width: 3
+            on_click:
+              - script.execute: player_controls_volume_down
+            on_long_press_repeat:
+              - script.execute: player_controls_volume_down
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "\U000F075E"
+                  text_color: 0xFFFFFF
+                  text_font: font_mdi_controls
+
+        - button:
+            id: controls_volume_up_button
+            align: BOTTOM_MID
+            x: 72
+            y: -58
+            width: 58
+            height: 48
+            radius: 24
+            bg_color: 0x202020
+            bg_opa: 85%
+            border_color: 0x505050
+            border_width: 1
+            pressed:
+              bg_color: 0x66CCFF
+              bg_opa: COVER
+              border_color: 0xFFFFFF
+              border_width: 3
+            on_click:
+              - script.execute: player_controls_volume_up
+            on_long_press_repeat:
+              - script.execute: player_controls_volume_up
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "\U000F075D"
+                  text_color: 0xFFFFFF
+                  text_font: font_mdi_controls
+
+        - obj:
+            id: rotary_volume_overlay_controls
+            align: CENTER
+            width: 360
+            height: 360
+            bg_opa: TRANSP
+            border_opa: TRANSP
+            pad_all: 0
+            scrollable: false
+            clickable: false
+            hidden: true
+            widgets:
+              - arc:
+                  id: rotary_volume_arc_controls
+                  align: CENTER
+                  width: 330
+                  height: 330
+                  min_value: 0
+                  max_value: 100
+                  value: 0
+                  rotation: 270deg
+                  adjustable: true
+                  arc_color: 0x202020
+                  arc_width: 24
+                  arc_opa: 60%
+                  indicator:
+                    arc_color: 0xFF0000
+                    arc_width: 24
+                    arc_opa: COVER
+                  knob:
+                    bg_color: 0xFFFFFF
+                    bg_opa: COVER
+                    radius: CIRCLE
+                    pad_all: 5
+              - obj:
+                  id: rotary_volume_label_box_controls
+                  align: CENTER
+                  width: 128
+                  height: 76
+                  bg_color: 0x000000
+                  bg_opa: 50%
+                  border_opa: TRANSP
+                  radius: 14
+                  pad_all: 0
+                  scrollable: false
+                  widgets:
+                    - label:
+                        id: rotary_volume_label_controls
+                        align: CENTER
+                        text: "0%"
+                        text_color: 0xFFFFFF
+                        text_font: font_boot
+
+    - id: sendspin_page
+      bg_color: 0x000000
+      widgets:
+        - image:
+            id: album_art_widget
+            align: TOP_MID
+            x: 0
+            y: 0
+            src: fallback_playing_image
+            width: ${imagewidth}
+            height: ${imageheight}
+            antialias: false
+            clickable: false
+
+        - image:
+            id: album_art_transition_widget
+            align: TOP_MID
+            x: 0
+            y: 0
+            src: fallback_playing_image
+            width: ${imagewidth}
+            height: ${imageheight}
+            antialias: false
+            clickable: false
+            hidden: true
+
+        - canvas:
+            id: canvas_main
+            width: 128
+            height: 128
+            align: CENTER
+            x: 0
+            y: 0
+            hidden: true
+
+        - obj:
+            id: now_playing_bar
+            align: BOTTOM_MID
+            y: -28
+            width: 300
+            height: 36
+            bg_color: 0x000000
+            bg_opa: 75%
+            border_opa: TRANSP
+            radius: 4
+            pad_all: 0
+            scrollable: false
+            hidden: true
+            widgets:
+              - label:
+                  id: now_playing_label
+                  align: CENTER
+                  width: 284
+                  text: ""
+                  text_color: 0xFFFFFF
+                  text_font: font_display
+                  long_mode: SCROLL_CIRCULAR
+                  text_align: CENTER
+
+        - obj:
+            id: volume_feedback_box
+            align: CENTER
+            width: 126
+            height: 92
+            bg_color: 0x000000
+            bg_opa: 75%
+            border_color: 0x66CCFF
+            border_width: 2
+            radius: 18
+            scrollable: false
+            hidden: true
+            widgets:
+              - label:
+                  id: volume_feedback_label
+                  align: CENTER
+                  text: "+5"
+                  text_color: 0xFFFFFF
+                  text_font: font_temp_big
+
+        - obj:
+            id: rotary_volume_overlay
+            align: CENTER
+            width: 360
+            height: 360
+            bg_opa: TRANSP
+            border_opa: TRANSP
+            pad_all: 0
+            scrollable: false
+            clickable: false
+            hidden: true
+            widgets:
+              - arc:
+                  id: rotary_volume_arc
+                  align: CENTER
+                  width: 330
+                  height: 330
+                  min_value: 0
+                  max_value: 100
+                  value: 0
+                  rotation: 270deg
+                  adjustable: true
+                  arc_color: 0x202020
+                  arc_width: 24
+                  arc_opa: 60%
+                  indicator:
+                    arc_color: 0xFF0000
+                    arc_width: 24
+                    arc_opa: COVER
+                  knob:
+                    bg_color: 0xFFFFFF
+                    bg_opa: COVER
+                    radius: CIRCLE
+                    pad_all: 5
+              - obj:
+                  id: rotary_volume_label_box
+                  align: CENTER
+                  width: 128
+                  height: 76
+                  bg_color: 0x000000
+                  bg_opa: 50%
+                  border_opa: TRANSP
+                  radius: 14
+                  pad_all: 0
+                  scrollable: false
+                  widgets:
+                    - label:
+                        id: rotary_volume_label
+                        align: CENTER
+                        text: "0%"
+                        text_color: 0xFFFFFF
+                        text_font: font_boot
