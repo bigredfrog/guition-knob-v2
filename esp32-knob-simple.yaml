@@ -27,7 +27,7 @@ i2c:
   scl: GPIO10
 
 external_components:
-  - source: github://pr#16057
+  - source: github://esphome/esphome@sendspin-artwork
     components: [generic_image, sendspin]
   - source: github://RAR/esphome-drv2605
     components: [drv2605]
