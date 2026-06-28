@@ -14,15 +14,6 @@ substitutions:
   media_sample_rate: "48000"
   ui_phase_controls: "1"
   ui_phase_now_playing: "2"
-  ui_phase_demo_1: "3"
-  ui_phase_demo_2: "4"
-  ui_phase_demo_3: "5"
-  ui_phase_demo_4: "6"
-
-  demo_page_1_asset: "assets/cyber.png"
-  demo_page_2_asset: "assets/noir.png"
-  demo_page_3_asset: "assets/country.png"
-  demo_page_4_asset: "assets/cartoon.png"
 
 spi:
   id: display_qspi
@@ -41,6 +32,10 @@ external_components:
   - source: github://RAR/esphome-drv2605
     components: [drv2605]
     refresh: 1h
+  - source:
+      type: local
+      path: external_components/ddp-esphome/components
+    components: [ddp, ddp_canvas]
 
 esphome:
   name: ${name}
@@ -89,29 +84,28 @@ psram:
   speed: 80MHz
   ignore_not_found: false
 
+# Core DDP component - handles UDP reception
+# Canvas renderer - maps DDP stream to LVGL canvas
+
+ddp:
+  id: ddp_server
+  port: 4048
+
+ddp_canvas:
+  - id: canvas_renderer_1
+    ddp_id: ddp_server
+    stream: 1
+    canvas: canvas_main
+    width: 128
+    height: 128
+    back_buffers: 2
+    receiving:
+      id: ddp_receiving
+      name: "Stream 1 Active"
+
 image:
   - file: assets/RCoE_small_LOGO.png
     id: fallback_playing_image
-    resize: ${imagewidth}x${imageheight}
-    type: RGB565
-    dither: NONE
-  - file: ${demo_page_1_asset}
-    id: demo_page_1_background
-    resize: ${imagewidth}x${imageheight}
-    type: RGB565
-    dither: NONE
-  - file: ${demo_page_2_asset}
-    id: demo_page_2_background
-    resize: ${imagewidth}x${imageheight}
-    type: RGB565
-    dither: NONE
-  - file: ${demo_page_3_asset}
-    id: demo_page_3_background
-    resize: ${imagewidth}x${imageheight}
-    type: RGB565
-    dither: NONE
-  - file: ${demo_page_4_asset}
-    id: demo_page_4_background
     resize: ${imagewidth}x${imageheight}
     type: RGB565
     dither: NONE
@@ -202,11 +196,6 @@ globals:
 
   - id: haptic_last_ms
     type: uint32_t
-    restore_value: no
-    initial_value: "0"
-
-  - id: led_ring_offset
-    type: int
     restore_value: no
     initial_value: "0"
 
@@ -316,6 +305,9 @@ media_player:
       then:
         - script.execute: led_ring_apply_state
         - lvgl.widget.show: now_playing_bar
+        - script.execute:
+            id: set_ui_phase
+            phase: ${ui_phase_now_playing}
 
     on_pause:
       then:
@@ -328,6 +320,20 @@ media_player:
         - lvgl.widget.hide: now_playing_bar
 
 binary_sensor:
+  - platform: template
+    id: ddp_stream_active
+    name: "DDP Stream Active"
+    internal: true
+    lambda: 'return id(ddp_receiving).state;'
+    on_state:
+      then:
+        - lambda: |-
+            if (x) {
+              lv_obj_clear_flag(id(canvas_main), LV_OBJ_FLAG_HIDDEN);
+            } else {
+              lv_obj_add_flag(id(canvas_main), LV_OBJ_FLAG_HIDDEN);
+            }
+
   - platform: gpio
     id: rotary_cw_pulse
     internal: true
@@ -341,21 +347,9 @@ binary_sensor:
       - delayed_on_off: 2ms
     on_press:
       then:
-        - lambda: |-
-            ESP_LOGW("ui_diag", "rotary CW: phase=%d", id(ui_phase));
-        - if:
-            condition:
-              lambda: 'return id(ui_phase) == ${ui_phase_controls};'
-            then:
-              - lambda: 'ESP_LOGW("ui_diag", "rotary CW -> volume path");'
-              - media_player.volume_up: external_media_player
-              - script.execute: haptic_click
-              - script.execute: show_rotary_volume_feedback
-            else:
-              - lambda: 'ESP_LOGW("ui_diag", "rotary CW -> browse path");'
-              - script.execute:
-                  id: step_browse_page
-                  direction: 1
+        - media_player.volume_up: external_media_player
+        - script.execute: haptic_click
+        - script.execute: show_rotary_volume_feedback
 
   - platform: gpio
     id: rotary_ccw_pulse
@@ -370,21 +364,9 @@ binary_sensor:
       - delayed_on_off: 2ms
     on_press:
       then:
-        - lambda: |-
-            ESP_LOGW("ui_diag", "rotary CCW: phase=%d", id(ui_phase));
-        - if:
-            condition:
-              lambda: 'return id(ui_phase) == ${ui_phase_controls};'
-            then:
-              - lambda: 'ESP_LOGW("ui_diag", "rotary CCW -> volume path");'
-              - media_player.volume_down: external_media_player
-              - script.execute: haptic_click
-              - script.execute: show_rotary_volume_feedback
-            else:
-              - lambda: 'ESP_LOGW("ui_diag", "rotary CCW -> browse path");'
-              - script.execute:
-                  id: step_browse_page
-                  direction: -1
+        - media_player.volume_down: external_media_player
+        - script.execute: haptic_click
+        - script.execute: show_rotary_volume_feedback
 
 text_sensor:
   - platform: sendspin
@@ -492,7 +474,6 @@ script:
       phase: int
     then:
       - lambda: |-
-          ESP_LOGW("ui_diag", "set_ui_phase: %d -> %d", id(ui_phase), phase);
           id(ui_phase) = phase;
       - if:
           condition:
@@ -504,293 +485,6 @@ script:
             lambda: 'return phase == ${ui_phase_now_playing};'
           then:
             - lvgl.page.show: sendspin_page
-      - if:
-          condition:
-            lambda: 'return phase == ${ui_phase_demo_1};'
-          then:
-            - lvgl.page.show: demo_page_1
-      - if:
-          condition:
-            lambda: 'return phase == ${ui_phase_demo_2};'
-          then:
-            - lvgl.page.show: demo_page_2
-      - if:
-          condition:
-            lambda: 'return phase == ${ui_phase_demo_3};'
-          then:
-            - lvgl.page.show: demo_page_3
-      - if:
-          condition:
-            lambda: 'return phase == ${ui_phase_demo_4};'
-          then:
-            - lvgl.page.show: demo_page_4
-      - script.execute:
-          id: show_page_mode_overlay
-          phase: !lambda 'return phase;'
-
-  - id: show_page_mode_overlay
-    mode: restart
-    parameters:
-      phase: int
-    then:
-      - lambda: |-
-          lv_obj_t *box = nullptr;
-          lv_obj_t *label = nullptr;
-          const char *mode_text = nullptr;
-
-          switch (phase) {
-            case ${ui_phase_controls}:
-              box = id(controls_mode_overlay_box);
-              label = id(controls_mode_overlay_label);
-              mode_text = "Controls";
-              break;
-            case ${ui_phase_now_playing}:
-              box = id(sendspin_mode_overlay_box);
-              label = id(sendspin_mode_overlay_label);
-              mode_text = "Sendspin";
-              break;
-            case ${ui_phase_demo_1}:
-              box = id(demo_page_1_mode_overlay_box);
-              label = id(demo_page_1_mode_overlay_label);
-              mode_text = "Demo 1";
-              break;
-            case ${ui_phase_demo_2}:
-              box = id(demo_page_2_mode_overlay_box);
-              label = id(demo_page_2_mode_overlay_label);
-              mode_text = "Demo 2";
-              break;
-            case ${ui_phase_demo_3}:
-              box = id(demo_page_3_mode_overlay_box);
-              label = id(demo_page_3_mode_overlay_label);
-              mode_text = "Demo 3";
-              break;
-            case ${ui_phase_demo_4}:
-              box = id(demo_page_4_mode_overlay_box);
-              label = id(demo_page_4_mode_overlay_label);
-              mode_text = "Demo 4";
-              break;
-            default:
-              return;
-          }
-
-          lv_anim_del(box, nullptr);
-          lv_anim_del(label, nullptr);
-          lv_label_set_text(label, mode_text);
-          lv_obj_set_style_opa(box, LV_OPA_COVER, 0);
-          lv_obj_set_style_opa(label, LV_OPA_COVER, 0);
-          lv_obj_clear_flag(box, LV_OBJ_FLAG_HIDDEN);
-          lv_obj_move_foreground(box);
-      - delay: 2600ms
-      - lambda: |-
-          lv_obj_t *box = nullptr;
-          lv_obj_t *label = nullptr;
-
-          switch (phase) {
-            case ${ui_phase_controls}:
-              box = id(controls_mode_overlay_box);
-              label = id(controls_mode_overlay_label);
-              break;
-            case ${ui_phase_now_playing}:
-              box = id(sendspin_mode_overlay_box);
-              label = id(sendspin_mode_overlay_label);
-              break;
-            case ${ui_phase_demo_1}:
-              box = id(demo_page_1_mode_overlay_box);
-              label = id(demo_page_1_mode_overlay_label);
-              break;
-            case ${ui_phase_demo_2}:
-              box = id(demo_page_2_mode_overlay_box);
-              label = id(demo_page_2_mode_overlay_label);
-              break;
-            case ${ui_phase_demo_3}:
-              box = id(demo_page_3_mode_overlay_box);
-              label = id(demo_page_3_mode_overlay_label);
-              break;
-            case ${ui_phase_demo_4}:
-              box = id(demo_page_4_mode_overlay_box);
-              label = id(demo_page_4_mode_overlay_label);
-              break;
-            default:
-              return;
-          }
-
-          lv_anim_t fade_box;
-          lv_anim_init(&fade_box);
-          lv_anim_set_var(&fade_box, box);
-          lv_anim_set_values(&fade_box, LV_OPA_COVER, LV_OPA_TRANSP);
-          lv_anim_set_time(&fade_box, 400);
-          lv_anim_set_exec_cb(&fade_box, [](void *obj, int32_t opacity) {
-            lv_obj_set_style_opa((lv_obj_t *) obj, opacity, 0);
-          });
-          lv_anim_start(&fade_box);
-
-          lv_anim_t fade_label;
-          lv_anim_init(&fade_label);
-          lv_anim_set_var(&fade_label, label);
-          lv_anim_set_values(&fade_label, LV_OPA_COVER, LV_OPA_TRANSP);
-          lv_anim_set_time(&fade_label, 400);
-          lv_anim_set_exec_cb(&fade_label, [](void *obj, int32_t opacity) {
-            lv_obj_set_style_opa((lv_obj_t *) obj, opacity, 0);
-          });
-          lv_anim_start(&fade_label);
-      - delay: 400ms
-      - lambda: |-
-          lv_obj_t *box = nullptr;
-
-          switch (phase) {
-            case ${ui_phase_controls}:
-              box = id(controls_mode_overlay_box);
-              break;
-            case ${ui_phase_now_playing}:
-              box = id(sendspin_mode_overlay_box);
-              break;
-            case ${ui_phase_demo_1}:
-              box = id(demo_page_1_mode_overlay_box);
-              break;
-            case ${ui_phase_demo_2}:
-              box = id(demo_page_2_mode_overlay_box);
-              break;
-            case ${ui_phase_demo_3}:
-              box = id(demo_page_3_mode_overlay_box);
-              break;
-            case ${ui_phase_demo_4}:
-              box = id(demo_page_4_mode_overlay_box);
-              break;
-            default:
-              return;
-          }
-
-          lv_obj_add_flag(box, LV_OBJ_FLAG_HIDDEN);
-
-  - id: step_browse_page
-    parameters:
-      direction: int
-    then:
-      - script.execute: haptic_click
-      - lambda: |-
-          const int current_phase = id(ui_phase);
-          ESP_LOGW("ui_diag", "step_browse_page: phase=%d dir=%d", current_phase, direction);
-
-          // Only browse within the sendspin/demo ring.
-          // If this is ever called while controls is active, do nothing.
-          if (current_phase < ${ui_phase_now_playing} || current_phase > ${ui_phase_demo_4}) {
-            ESP_LOGW("ui_diag", "step_browse_page: ignored (out of browse ring)");
-            return;
-          }
-
-          int next_phase = current_phase + direction;
-          if (next_phase > ${ui_phase_demo_4}) {
-            next_phase = ${ui_phase_now_playing};
-          } else if (next_phase < ${ui_phase_now_playing}) {
-            next_phase = ${ui_phase_demo_4};
-          }
-
-          ESP_LOGW("ui_diag", "step_browse_page: next_phase=%d", next_phase);
-          id(set_ui_phase)->execute(next_phase);
-
-  - id: show_demo_touch_feedback
-    mode: restart
-    parameters:
-      phase: int
-      touch_x: int
-      touch_y: int
-    then:
-      - lambda: |-
-          lv_obj_t *indicator = nullptr;
-          switch (phase) {
-            case ${ui_phase_demo_1}:
-              indicator = id(demo_page_1_touch_indicator);
-              break;
-            case ${ui_phase_demo_2}:
-              indicator = id(demo_page_2_touch_indicator);
-              break;
-            case ${ui_phase_demo_3}:
-              indicator = id(demo_page_3_touch_indicator);
-              break;
-            case ${ui_phase_demo_4}:
-              indicator = id(demo_page_4_touch_indicator);
-              break;
-            default:
-              return;
-          }
-
-          const int radius = 36;
-          const int diameter = radius * 2;
-          lv_coord_t x = touch_x - radius;
-          lv_coord_t y = touch_y - radius;
-          const int max_x = (int) id(main_display).get_width() - diameter;
-          const int max_y = (int) id(main_display).get_height() - diameter;
-          if (x < 0) x = 0;
-          if (y < 0) y = 0;
-          if (x > max_x) x = max_x;
-          if (y > max_y) y = max_y;
-
-          lv_anim_del(indicator, nullptr);
-          lv_obj_set_pos(indicator, x, y);
-          lv_obj_set_style_bg_opa(indicator, 128, 0);
-          lv_obj_set_style_border_opa(indicator, LV_OPA_COVER, 0);
-          lv_obj_clear_flag(indicator, LV_OBJ_FLAG_HIDDEN);
-          lv_obj_move_foreground(indicator);
-      - delay: 1600ms
-      - lambda: |-
-          lv_obj_t *indicator = nullptr;
-          switch (phase) {
-            case ${ui_phase_demo_1}:
-              indicator = id(demo_page_1_touch_indicator);
-              break;
-            case ${ui_phase_demo_2}:
-              indicator = id(demo_page_2_touch_indicator);
-              break;
-            case ${ui_phase_demo_3}:
-              indicator = id(demo_page_3_touch_indicator);
-              break;
-            case ${ui_phase_demo_4}:
-              indicator = id(demo_page_4_touch_indicator);
-              break;
-            default:
-              return;
-          }
-
-          lv_anim_t fade_bg;
-          lv_anim_init(&fade_bg);
-          lv_anim_set_var(&fade_bg, indicator);
-          lv_anim_set_values(&fade_bg, 128, 0);
-          lv_anim_set_time(&fade_bg, 400);
-          lv_anim_set_exec_cb(&fade_bg, [](void *obj, int32_t opacity) {
-            lv_obj_set_style_bg_opa((lv_obj_t *) obj, opacity, 0);
-          });
-          lv_anim_start(&fade_bg);
-
-          lv_anim_t fade_border;
-          lv_anim_init(&fade_border);
-          lv_anim_set_var(&fade_border, indicator);
-          lv_anim_set_values(&fade_border, LV_OPA_COVER, 0);
-          lv_anim_set_time(&fade_border, 400);
-          lv_anim_set_exec_cb(&fade_border, [](void *obj, int32_t opacity) {
-            lv_obj_set_style_border_opa((lv_obj_t *) obj, opacity, 0);
-          });
-          lv_anim_start(&fade_border);
-      - delay: 400ms
-      - lambda: |-
-          lv_obj_t *indicator = nullptr;
-          switch (phase) {
-            case ${ui_phase_demo_1}:
-              indicator = id(demo_page_1_touch_indicator);
-              break;
-            case ${ui_phase_demo_2}:
-              indicator = id(demo_page_2_touch_indicator);
-              break;
-            case ${ui_phase_demo_3}:
-              indicator = id(demo_page_3_touch_indicator);
-              break;
-            case ${ui_phase_demo_4}:
-              indicator = id(demo_page_4_touch_indicator);
-              break;
-            default:
-              return;
-          }
-
-          lv_obj_add_flag(indicator, LV_OBJ_FLAG_HIDDEN);
 
   - id: led_ring_apply_state
     mode: restart
@@ -801,9 +495,23 @@ script:
           then:
             - light.turn_off: rgb_ring
           else:
-            - light.turn_on:
-                id: rgb_ring
-                effect: "Rotate"
+            - if:
+                condition:
+                  media_player.is_playing: external_media_player
+                then:
+                  - light.turn_on:
+                      id: rgb_ring
+                      brightness: 45%
+                      red: 0%
+                      green: 100%
+                      blue: 0%
+                else:
+                  - light.turn_on:
+                      id: rgb_ring
+                      brightness: 28%
+                      red: 100%
+                      green: 0%
+                      blue: 0%
 
   - id: haptic_click
     mode: restart
@@ -1141,10 +849,8 @@ touchscreen:
             if (elapsed <= 700 && abs_x <= tap_max_dist && abs_y <= tap_max_dist) {
               if (id(ui_phase) == ${ui_phase_controls}) {
                 id(set_ui_phase)->execute(${ui_phase_now_playing});
-              } else if (id(ui_phase) == ${ui_phase_now_playing}) {
-                id(set_ui_phase)->execute(${ui_phase_controls});
               } else {
-                id(show_demo_touch_feedback)->execute(id(ui_phase), id(touch_last_x), id(touch_last_y));
+                id(set_ui_phase)->execute(${ui_phase_controls});
               }
             }
 
@@ -1187,23 +893,7 @@ light:
     chipset: WS2812
     rgb_order: GRB
     restore_mode: ALWAYS_OFF
-    default_transition_length: 0ms
-    effects:
-      - addressable_lambda:
-          name: "Rotate"
-          update_interval: 154ms
-          lambda: |-
-            it.all() = Color(0, 0, 0);
-            int pos = id(led_ring_offset);
-            Color color;
-            if (id(external_media_player).state == media_player::MediaPlayerState::MEDIA_PLAYER_STATE_PLAYING) {
-              color = Color(0, 115, 0);
-            } else {
-              color = Color(71, 0, 0);
-            }
-            it[pos] = color;
-            it[(pos + 1) % it.size()] = color;
-            id(led_ring_offset) = (pos + 1) % it.size();
+    default_transition_length: 250ms
 
 lvgl:
   displays:
@@ -1249,28 +939,6 @@ lvgl:
             border_opa: TRANSP
             radius: 0
             scrollable: false
-
-        - obj:
-            id: controls_mode_overlay_box
-            align: TOP_MID
-            y: 18
-            width: 176
-            height: 44
-            bg_color: 0x000000
-            bg_opa: 70%
-            border_color: 0xFFFFFF
-            border_width: 2
-            radius: 22
-            pad_all: 0
-            scrollable: false
-            hidden: true
-            widgets:
-              - label:
-                  id: controls_mode_overlay_label
-                  align: CENTER
-                  text: "Controls"
-                  text_color: 0xFFFFFF
-                  text_font: font_display
 
         - label:
             id: controls_title_label
@@ -1530,27 +1198,14 @@ lvgl:
             clickable: false
             hidden: true
 
-        - obj:
-            id: sendspin_mode_overlay_box
-            align: TOP_MID
-            y: 18
-            width: 176
-            height: 44
-            bg_color: 0x000000
-            bg_opa: 70%
-            border_color: 0xFFFFFF
-            border_width: 2
-            radius: 22
-            pad_all: 0
-            scrollable: false
+        - canvas:
+            id: canvas_main
+            width: 360
+            height: 360
+            align: CENTER
+            x: 0
+            y: 0
             hidden: true
-            widgets:
-              - label:
-                  id: sendspin_mode_overlay_label
-                  align: CENTER
-                  text: "Sendspin"
-                  text_color: 0xFFFFFF
-                  text_font: font_display
 
         - obj:
             id: now_playing_bar
@@ -1648,199 +1303,3 @@ lvgl:
                         text: "0%"
                         text_color: 0xFFFFFF
                         text_font: font_boot
-
-    - id: demo_page_1
-      bg_color: 0x000000
-      widgets:
-        - image:
-            align: TOP_MID
-            x: 0
-            y: 0
-            src: demo_page_1_background
-            width: ${imagewidth}
-            height: ${imageheight}
-            antialias: false
-            clickable: false
-        - obj:
-            id: demo_page_1_mode_overlay_box
-            align: TOP_MID
-            y: 18
-            width: 176
-            height: 44
-            bg_color: 0x000000
-            bg_opa: 70%
-            border_color: 0xFFFFFF
-            border_width: 2
-            radius: 22
-            pad_all: 0
-            scrollable: false
-            hidden: true
-            widgets:
-              - label:
-                  id: demo_page_1_mode_overlay_label
-                  align: CENTER
-                  text: "Demo 1"
-                  text_color: 0xFFFFFF
-                  text_font: font_display
-        - obj:
-            id: demo_page_1_touch_indicator
-            x: 0
-            y: 0
-            width: 72
-            height: 72
-            radius: 36
-            bg_color: 0xFFFFFF
-            bg_opa: 50%
-            border_color: 0xFFFFFF
-            border_width: 3
-            border_opa: COVER
-            scrollable: false
-            clickable: false
-            hidden: true
-
-    - id: demo_page_2
-      bg_color: 0x000000
-      widgets:
-        - image:
-            align: TOP_MID
-            x: 0
-            y: 0
-            src: demo_page_2_background
-            width: ${imagewidth}
-            height: ${imageheight}
-            antialias: false
-            clickable: false
-        - obj:
-            id: demo_page_2_mode_overlay_box
-            align: TOP_MID
-            y: 18
-            width: 176
-            height: 44
-            bg_color: 0x000000
-            bg_opa: 70%
-            border_color: 0xFFFFFF
-            border_width: 2
-            radius: 22
-            pad_all: 0
-            scrollable: false
-            hidden: true
-            widgets:
-              - label:
-                  id: demo_page_2_mode_overlay_label
-                  align: CENTER
-                  text: "Demo 2"
-                  text_color: 0xFFFFFF
-                  text_font: font_display
-        - obj:
-            id: demo_page_2_touch_indicator
-            x: 0
-            y: 0
-            width: 72
-            height: 72
-            radius: 36
-            bg_color: 0xFFFFFF
-            bg_opa: 50%
-            border_color: 0xFFFFFF
-            border_width: 3
-            border_opa: COVER
-            scrollable: false
-            clickable: false
-            hidden: true
-
-    - id: demo_page_3
-      bg_color: 0x000000
-      widgets:
-        - image:
-            align: TOP_MID
-            x: 0
-            y: 0
-            src: demo_page_3_background
-            width: ${imagewidth}
-            height: ${imageheight}
-            antialias: false
-            clickable: false
-        - obj:
-            id: demo_page_3_mode_overlay_box
-            align: TOP_MID
-            y: 18
-            width: 176
-            height: 44
-            bg_color: 0x000000
-            bg_opa: 70%
-            border_color: 0xFFFFFF
-            border_width: 2
-            radius: 22
-            pad_all: 0
-            scrollable: false
-            hidden: true
-            widgets:
-              - label:
-                  id: demo_page_3_mode_overlay_label
-                  align: CENTER
-                  text: "Demo 3"
-                  text_color: 0xFFFFFF
-                  text_font: font_display
-        - obj:
-            id: demo_page_3_touch_indicator
-            x: 0
-            y: 0
-            width: 72
-            height: 72
-            radius: 36
-            bg_color: 0xFFFFFF
-            bg_opa: 50%
-            border_color: 0xFFFFFF
-            border_width: 3
-            border_opa: COVER
-            scrollable: false
-            clickable: false
-            hidden: true
-
-    - id: demo_page_4
-      bg_color: 0x000000
-      widgets:
-        - image:
-            align: TOP_MID
-            x: 0
-            y: 0
-            src: demo_page_4_background
-            width: ${imagewidth}
-            height: ${imageheight}
-            antialias: false
-            clickable: false
-        - obj:
-            id: demo_page_4_mode_overlay_box
-            align: TOP_MID
-            y: 18
-            width: 176
-            height: 44
-            bg_color: 0x000000
-            bg_opa: 70%
-            border_color: 0xFFFFFF
-            border_width: 2
-            radius: 22
-            pad_all: 0
-            scrollable: false
-            hidden: true
-            widgets:
-              - label:
-                  id: demo_page_4_mode_overlay_label
-                  align: CENTER
-                  text: "Demo 4"
-                  text_color: 0xFFFFFF
-                  text_font: font_display
-        - obj:
-            id: demo_page_4_touch_indicator
-            x: 0
-            y: 0
-            width: 72
-            height: 72
-            radius: 36
-            bg_color: 0xFFFFFF
-            bg_opa: 50%
-            border_color: 0xFFFFFF
-            border_width: 3
-            border_opa: COVER
-            scrollable: false
-            clickable: false
-            hidden: true
