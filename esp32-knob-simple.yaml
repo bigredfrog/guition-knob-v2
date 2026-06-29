@@ -90,7 +90,7 @@ psram:
   ignore_not_found: false
 
 image:
-  - file: assets/RCoE_small_LOGO.png
+  - file: assets/LOGO.png
     id: fallback_playing_image
     resize: ${imagewidth}x${imageheight}
     type: RGB565
