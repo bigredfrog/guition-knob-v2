@@ -5,7 +5,21 @@ This repository contains working ESPHome configurations for two hardware familie
 - Guition 1.8-inch rotary touchscreen knob (ESP32-S3)
 - Sonocotta HiFi ESP32-S3 audio boards
 
-The main focus is [esp32-knob-simple.yaml](esp32-knob-simple.yaml), which provides a hello world level touch + rotary UI for Sendspin playback, album art display, haptics, and LED ring feedback.
+This is for general investigations, there is no matrix of support or implied maintanance.
+
+[esp32-knob-simple.yaml](esp32-knob-simple.yaml), provides a hello world level touch + rotary UI for Sendspin playback, album art display, haptics, and LED ring feedback.
+
+Files relating to esp32-hifi were generally used to investigate networking disconnects.
+
+## Hardware Platform Links
+
+- Guition Knob Display: https://www.guition.com/esp32-display-module/1-8-inch-knob-display
+- Sonocotta HiFi ESP32/ESP32-S3: https://sonocotta.com/hifi-esp32-and-hifi-esp32s3/
+
+## Original Code sources
+
+https://github.com/RealDeco/sendspin-guition
+https://github.com/sonocotta/esp32-audio-dock/tree/main/firmware/esphome/1-hifi-esp32
 
 ## Top-Level Capability Overview
 
@@ -51,11 +65,6 @@ UI phases used by this config:
 - [esp32-hifi-wifi.yaml](esp32-hifi-wifi.yaml): Sonocotta HiFi board profile using Wi-Fi and package-based Sendspin/audio modules.
 - [esp32-hifi-wifi-black.yaml](esp32-hifi-wifi-black.yaml): Alternate Wi-Fi HiFi device profile (board/color variant) with the same package-driven stack.
 - [esp32-hifi-eth.yaml](esp32-hifi-eth.yaml): HiFi profile oriented to Ethernet package usage instead of Wi-Fi.
-
-## Hardware Platform Links
-
-- Guition Knob Display: https://www.guition.com/esp32-display-module/1-8-inch-knob-display
-- Sonocotta HiFi ESP32/ESP32-S3: https://sonocotta.com/hifi-esp32-and-hifi-esp32s3/
 
 ## Build And Run
 
